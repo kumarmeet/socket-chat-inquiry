@@ -35,7 +35,7 @@ class InquiryChatSocket {
 
         socket.on('leave', (user_id, chat_id) => {
             console.log("LEAVE");
-            return this.handleLeave(socket, +user_id, +chatId)
+            return this.handleLeave(socket, +user_id, +chat_id)
         });
     }
 
@@ -72,11 +72,13 @@ class InquiryChatSocket {
     }
 
     async handleMessage(socket, messageData) {
-        const { user_id, inquiry_id, chat_id, chat_message, type, media_file } = messageData;
+        const { user_id, inquiry_id, chat_id, chat_message, type, media_file, isAdmin } = messageData;
+
         try {
             // Perform database check if the chat exists
             const chat = await db('chats').where({ id: chat_id }).first();
             const inquiryData = await db("inquries").where({ id: inquiry_id }).first();
+            let user_name = null;
 
             if (!inquiryData) {
                 socket.emit('error', 'Inquiry not found');
@@ -86,6 +88,13 @@ class InquiryChatSocket {
             if (chat) {
                 const { User_Name: customer_name, Customer_Id: customer_id, Assigned_To: assigned_to_name, inquiry_type } = inquiryData;
 
+                if(isAdmin) {
+                    user_name = await db("users").where({ id: user_id }).select("fullname").first() || "Admin";
+                } else {
+                    user_name = await db("customers").where({ id: user_id }).select("fullname").first() || "Customer";
+                }
+
+                const full_name_of_user = user_name?.fullname
 
                 // Insert the message into the database
                 const [message_id] = await db('chat_messages').insert({
@@ -94,6 +103,7 @@ class InquiryChatSocket {
                     chat_message: chat_message,
                     chat_message_type: type, //text, image, audio, video, document
                     media_file: media_file, //path of the media file otherwise null
+                    messenger_name: full_name_of_user,
                     is_read: 0
                 });
 
@@ -104,13 +114,14 @@ class InquiryChatSocket {
                     status: "success",
                     messageData: insertedMessageData,
                     message_id,
-                    assigned_to_name
+                    assigned_to_name,
+                    messenger_name: full_name_of_user,
                 });
 
                 console.log("insertedMessageData", insertedMessageData);
 
                 // Broadcast the message to all members of the chat
-                socket.to(chat_id).emit('message', { user_id, messageData: insertedMessageData, message_id, assigned_to_name });
+                socket.to(chat_id).emit('message', { user_id, messageData: insertedMessageData, message_id, assigned_to_name, messenger_name: full_name_of_user });
 
                 const notificationData = {
                     id: chat_id,
@@ -118,8 +129,10 @@ class InquiryChatSocket {
                     type: "inquiry_chat",
                     customer_id,
                     title: `${inquiry_type} #${inquiry_id}`,
-                    body: chat_message
+                    body: `${full_name_of_user}: ${chat_message}`
                 }
+
+                console.log("notificationData", notificationData)
 
                 //send push notification to other member (message reciver)
                 await pushNotification('inquiry_chat', customer_id, notificationData);
